@@ -25,8 +25,8 @@
 
 #include <stdio.h> // For the definition of NULL
 
-#include "SDL_sysjoystick_c.h"
 #include "../SDL_joystick_c.h"
+#include "SDL_sysjoystick_c.h"
 
 static SDL_joylist_item *JoystickByIndex(int index);
 
@@ -74,6 +74,12 @@ static EM_BOOL Emscripten_JoyStickConnected(int eventType, const EmscriptenGamep
 
     for (i = 0; i < item->naxes; i++) {
         item->axis[i] = gamepadEvent->axis[i];
+    }
+    // triggers should be handled as axis (analog buttons are converted to digital otherwise)
+    if ((item->naxes + 1) < 64) {
+        item->axis[item->naxes + 0] = 0;
+        item->axis[item->naxes + 1] = 0;
+        item->naxes += 2;
     }
 
     for (i = 0; i < item->nbuttons; i++) {
@@ -216,8 +222,8 @@ static bool EMSCRIPTEN_JoystickInit(void)
     }
 
     rc = emscripten_set_gamepaddisconnected_callback(NULL,
-                                                         0,
-                                                         Emscripten_JoyStickDisconnected);
+                                                     0,
+                                                     Emscripten_JoyStickDisconnected);
     if (rc != EMSCRIPTEN_RESULT_SUCCESS) {
         EMSCRIPTEN_JoystickQuit();
         return SDL_SetError("Could not set gamepad disconnect callback");
@@ -345,7 +351,18 @@ static void EMSCRIPTEN_JoystickUpdate(SDL_Joystick *joystick)
         if (result == EMSCRIPTEN_RESULT_SUCCESS) {
             if (gamepadState.timestamp == 0 || gamepadState.timestamp != item->timestamp) {
                 for (i = 0; i < item->nbuttons; i++) {
-                    if (item->digitalButton[i] != gamepadState.digitalButton[i]) {
+                    // triggers should be handled as axis
+                    if ((i == 6 || i == 7)) {
+                        int iaxis = item->naxes - 2 + (i - 6);
+                        if (item->axis[iaxis] != gamepadState.analogButton[i]) {
+                            joystick->axes[iaxis].has_initial_value = true;
+                            joystick->axes[iaxis].initial_value = 0;
+                            SDL_SendJoystickAxis(timestamp, item->joystick, iaxis,
+                                                 (Sint16)(32767. * gamepadState.analogButton[i]));
+                        }
+                        item->axis[iaxis] = gamepadState.axis[i];
+                        continue;
+                    } else if (item->digitalButton[i] != gamepadState.digitalButton[i]) {
                         bool down = (gamepadState.digitalButton[i] != 0);
                         SDL_SendJoystickButton(timestamp, item->joystick, i, down);
                     }
@@ -355,11 +372,11 @@ static void EMSCRIPTEN_JoystickUpdate(SDL_Joystick *joystick)
                     item->digitalButton[i] = gamepadState.digitalButton[i];
                 }
 
-                for (i = 0; i < item->naxes; i++) {
+                for (i = 0; i < (item->naxes - 2); i++) {
                     if (item->axis[i] != gamepadState.axis[i]) {
                         // do we need to do conversion?
                         SDL_SendJoystickAxis(timestamp, item->joystick, i,
-                                                (Sint16)(32767. * gamepadState.axis[i]));
+                                             (Sint16)(32767. * gamepadState.axis[i]));
                     }
 
                     // store to compare in next update
